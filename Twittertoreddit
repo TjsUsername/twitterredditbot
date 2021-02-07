@@ -1,0 +1,291 @@
+import threading
+import tweepy
+import time
+import re
+import json
+import praw
+
+
+def twitter_bot():
+    print('Bot Engaged', flush=True)
+
+    # Bot creds
+    CONSUMER_KEY = '4pKN2g6rmdYhzV9bH4HP9SVJa'  # api key
+    CONSUMER_SECRET = '1eG9BQ6QPLjppnzh0zDhgalKCNNbO8sP8TFYPwftaOBkCinzQc'  # api secret
+    ACCESS_KEY = '1044988565946544129-LIIjh8bXYuyKSw9Et8L57Sk2JT97sK'
+    ACCESS_SECRET = '4BgWuetu37t1MfsAn1IPGtSTUCSKFA4LnWSS0Euiz8jNA'
+    KEYWORDS = ['injury', 'line combinations', 'line combos', 'combo', 'line rushes', 'injured', 'hurt', 'signed to',
+                'recalled', 'rushes', 'promoted', '#FantasyHockey', 'projected lineup', '@DailyFaceoff']
+
+    # connect to twitter
+    auth = tweepy.OAuthHandler(CONSUMER_KEY, CONSUMER_SECRET)
+    auth.set_access_token(ACCESS_KEY, ACCESS_SECRET)
+    api = tweepy.API(auth)
+    api_me = api.me()
+    bot_name = api_me.screen_name
+
+    # File where last seen tweet.id was stored, so no duplicates
+    FILE_NAME = 'goalie_rt.json'
+
+    fields = "created_at,description,pinned_tweet_id"
+    params = {"usernames": "DailyFaceoff", "user.fields": fields}
+
+    def get_tweet():
+        tweets = api.user_timeline(screen_name="DailyFaceoff",
+                                   # 200 is the maximum allowed count
+                                   count=200,
+                                   include_rts=False,
+                                   # Necessary to keep full_text
+                                   # otherwise only the first 140 words are extracted
+                                   tweet_mode='extended')
+
+        all_tweets = []
+        goalie_tweets = []
+        all_tweets.extend(tweets)
+        oldest_id = tweets[-1].id
+        while True:
+            tweets = api.user_timeline(screen_name="DailyFaceoff",
+                                       # 200 is the maximum allowed count
+                                       count=200,
+                                       include_rts=False,
+                                       max_id=oldest_id - 1,
+                                       # Necessary to keep full_text
+                                       # otherwise only the first 140 words are extracted
+                                       tweet_mode='extended')
+            if len(tweets) == 0:
+                break
+            oldest_id = tweets[-1].id
+            all_tweets.extend(tweets)
+            print('N of tweets downloaded till now {}'.format(len(all_tweets)))
+
+        print("tweets len = {}".format(len(all_tweets)))
+
+        for info in all_tweets:
+            if str(info.full_text).__contains__(": Goalie Start:"):
+                print("ID: {}".format(info.id))
+                print(info.created_at)
+                text = re.sub('[^ ]+\.[^ ]+', '', info.full_text)  # nice trick to remove urls
+                print(text)
+                print("\n")
+                goalie_tweets.append((str(info.id), text, False))
+
+            if len(goalie_tweets) == 5:  # to clip the size of the goalie updates
+                break
+
+        with open('goalie_rt.json', 'w') as file:
+            data_dict = {}
+            data_dict['latest goalie'] = [goalie_tweets[0][0], goalie_tweets[0][1], goalie_tweets[0][2]]
+            data_dict['other goalies'] = [[goalie_tweets[i][0], goalie_tweets[i][1], goalie_tweets[i][2]] for i in
+                                          range(1, len(goalie_tweets))]
+            json.dump(data_dict, file)
+            print('done')
+
+    # DEV NOTE: 1270574762461401088 use as ref
+
+    # gets last seen tweet id, then replaces it with new id
+    def retrieve_last_seen_id(file_name):
+        try:
+            f_read = open(file_name, 'r')
+            data = json.load(f_read)
+            last_seen_id = data['latest goalie'][0]
+            return last_seen_id
+        except FileNotFoundError:
+            print('file does not exist... creating file')
+            get_tweet()
+            f_read = open(file_name, 'r')
+            data = json.load(f_read)
+            last_seen_id = data['latest goalie'][0]
+            return last_seen_id
+
+    def store_last_seen_id(last_seen_id, file_name):
+        f_read = open(file_name, 'r')
+        data = json.load(f_read)
+        data['last id'] = last_seen_id
+        f_read.close()
+        f_write = open(file_name, 'w')
+        json.dump(data, f_write)
+        f_write.close()
+
+    # RT logic
+    def retweet_from_timeline():
+        print('RTing...', flush=True)
+        last_seen_id = retrieve_last_seen_id(file_name=FILE_NAME)  # can be based off latest goalie or your latest RT
+        timeline = api.home_timeline(last_seen_id, tweet_mode='extended')
+        for tweets in timeline[::-1]:  # reverse the order
+
+            if tweets.user.screen_name == bot_name:  # not sure what this is for?
+                print("Keyword matched, but sent from bot account - SKIPPING!")
+
+            print(str(tweets.id) + ' - ' + tweets.full_text)
+
+            # if int(last_seen_id) < tweets.id:
+            last_seen_id = tweets.id
+            store_last_seen_id(last_seen_id, FILE_NAME)
+            # Regex here
+            comboregex = re.compile(r'([a-zA-Z./]+(-| - | -|- )[a-zA-Z./]+(-| - | -|- )[a-zA-Z./]+(\n)'
+                                    r'[a-zA-Z./]+(-| - | -|- )[a-zA-Z./]+(-| - | -|- )[a-zA-Z./]+(\n)'
+                                    r'[a-zA-Z./]+(-| - | -|- )[a-zA-Z./]+(-| - | -|- )[a-zA-Z./])', re.DOTALL)
+            combo_found = re.findall(comboregex, tweets.full_text)
+
+            # any of the keywords in the tweet, or did we find the regex pattern?
+            if any(keyword.lower() in tweets.full_text.lower() for keyword in KEYWORDS) or combo_found:
+                try:
+                    print("Found Keyword")
+                    print('RT')
+                    #api.retweet(tweets.id)  # simple RT
+                except tweepy.TweepError as e:
+                    print(e)
+                    time.sleep(120)
+
+    def check_for_new_goalie(file_name):
+        f_read = open(file_name, 'r')
+        data = json.load(f_read)
+        last_seen_id = data['latest goalie'][0]
+        f_read.close()
+
+        # will make this cleaner soon!
+        tweets = api.user_timeline(screen_name="DailyFaceoff",
+                                   # 200 is the maximum allowed count
+                                   count=200,
+                                   include_rts=False,
+                                   # Necessary to keep full_text
+                                   # otherwise only the first 140 words are extracted
+                                   tweet_mode='extended')
+
+        all_tweets = []
+        goalie_tweets = []
+        all_tweets.extend(tweets)
+        oldest_id = tweets[-1].id
+        while True:
+            tweets = api.user_timeline(screen_name="DailyFaceoff",
+                                       # 200 is the maximum allowed count
+                                       count=200,
+                                       include_rts=False,
+                                       max_id=oldest_id - 1,
+                                       # Necessary to keep full_text
+                                       # otherwise only the first 140 words are extracted
+                                       tweet_mode='extended')
+            if len(tweets) == 0:
+                break
+            oldest_id = tweets[-1].id
+            all_tweets.extend(tweets)
+
+        for info in all_tweets:
+            if str(info.full_text).__contains__("Goalie Start"):
+                text = re.sub('[^ ]+\.[^ ]+', '', info.full_text)  # nice trick to remove urls
+                goalie_tweets.append((str(info.id), text, False))
+
+            if len(goalie_tweets) == 5:  # to clip the size of the goalie updates
+                break
+
+        if last_seen_id != goalie_tweets[0][0]:
+            print('new goalie found')
+            with open(file_name, 'w') as file:
+                data['latest goalie'] = [goalie_tweets[0][0], goalie_tweets[0][1], goalie_tweets[0][2]]
+                data['other goalies'] = [[goalie_tweets[i][0], goalie_tweets[i][1], goalie_tweets[i][2]] for i in range(1, len(goalie_tweets))]
+                json.dump(data, file)
+        else:
+            print('no new goalies')
+
+
+
+    while True:
+        retweet_from_timeline()
+        check_for_new_goalie('goalie_rt.json')
+        time.sleep(120)
+
+
+def reddit_bot():
+    # Reddit creds
+    userAgent = 'FHFHBot'
+    cID = 'K1-26e2s1qxWJg'
+    cSC = 'eXPINy706R0cMgdVYiPV2m27tWqGRQ'
+    userN = 'FH-GoalieBot'
+    userP = 'xxxx'
+
+    numFound = 0
+
+    ## Reddit Auth
+    reddit = praw.Reddit(user_agent=userAgent,
+                         client_id=cID,
+                         client_secret=cSC,
+                         username=userN,
+                         password=userP)
+    subreddit = reddit.subreddit('fantasyhockey')  # any subreddit you want to monitor
+
+    # you will need to save a file called this, same for Last_Seen_Id.txt in the twitter bot
+    reddit_file_name = 'goalie_rt.json'
+
+    def retrieve_last_goalie(reddit_file_name):
+        with open(reddit_file_name) as f_read:
+            data = json.loads(f_read.read())
+            last_seen_goalie = data['latest goalie'][1]
+            return last_seen_goalie
+
+
+    def remember_postid():
+        f_read = open(reddit_file_name)
+        data = json.load(f_read)
+        f_read.close()
+        data['latest goalie'][2] = True
+        f_write = open(reddit_file_name, 'w')
+        json.dump(data, f_write)
+        f_write.close()
+
+    def has_latest_goalie_been_posted():
+        try:
+            with open(reddit_file_name) as f_read:
+                try:
+                    data = json.loads(f_read.read())
+                    return data['latest goalie'][2]
+                except json.decoder.JSONDecodeError:
+                    print('reddit bot could not locate the goalie json or the file was in use, will check again in 30 seconds')
+                    time.sleep(30)
+                    return True
+
+        except FileNotFoundError:
+            print('reddit bot could not locate the goalie json or the file was in use, will check again in 30 seconds')
+            time.sleep(30)
+            return True
+
+    while True:
+        if not has_latest_goalie_been_posted():
+            last_seen_goalie = retrieve_last_goalie(reddit_file_name)
+            bot_phrase = last_seen_goalie
+
+            # bot_phrase = Goalie_Update #phrase that the bot replies with
+
+            reddit_keywords = ['goalie starts: official thread']  # makes a set of keywords to find in subreddits
+
+            for submission in subreddit.new(limit=100):  # this views the top 10 posts in that subbreddit
+                n_title = submission.title.lower()  # makes the post title lowercase so we can compare our keywords with it.
+                for i in reddit_keywords:  # goes through our keywords
+                    if i in n_title:  # if one of our keywords matches a title in the top 10 of the subreddit
+                        numFound += 1
+                        print('Bot replying to: ')  # replies and outputs to the command line
+                        print("Title: ", submission.title)
+                        print("Text: ", submission.selftext)
+                        print("Score: ", submission.score)
+                        print("---------------------------------")
+                        print('Bot saying: ', bot_phrase)
+                        print()
+                        submission.reply(bot_phrase)
+                        remember_postid()
+                        time.sleep(200)
+                        break
+                else:
+                    continue  # cool way to get out of nested loops!
+                break
+
+
+            if numFound == 0:
+                print()
+                print("Sorry, didn't find any posts with those keywords, try again!")
+                time.sleep(200)
+
+
+if __name__ == '__main__':
+    t1 = threading.Thread(target=twitter_bot)
+    t1.start()
+    t2 = threading.Thread(target=reddit_bot)
+    t2.start()
