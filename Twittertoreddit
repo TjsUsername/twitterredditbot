@@ -10,10 +10,10 @@ def twitter_bot():
     print('Bot Engaged', flush=True)
 
     # Bot creds
-    CONSUMER_KEY = '4pKN2g6rmdYhzV9bH4HP9SVJa'  # api key
-    CONSUMER_SECRET = '1eG9BQ6QPLjppnzh0zDhgalKCNNbO8sP8TFYPwftaOBkCinzQc'  # api secret
-    ACCESS_KEY = '1044988565946544129-LIIjh8bXYuyKSw9Et8L57Sk2JT97sK'
-    ACCESS_SECRET = '4BgWuetu37t1MfsAn1IPGtSTUCSKFA4LnWSS0Euiz8jNA'
+    CONSUMER_KEY = 'XXXX'  # api key
+    CONSUMER_SECRET = 'XXXX'  # api secret
+    ACCESS_KEY = 'XXXX'
+    ACCESS_SECRET = 'XXXX'
     KEYWORDS = ['injury', 'line combinations', 'line combos', 'combo', 'line rushes', 'injured', 'hurt', 'signed to',
                 'recalled', 'rushes', 'promoted', '#FantasyHockey', 'projected lineup', '@DailyFaceoff']
 
@@ -198,8 +198,8 @@ def twitter_bot():
 def reddit_bot():
     # Reddit creds
     userAgent = 'FHFHBot'
-    cID = 'K1-26e2s1qxWJg'
-    cSC = 'eXPINy706R0cMgdVYiPV2m27tWqGRQ'
+    cID = 'XXXX'
+    cSC = 'XXXX'
     userN = 'FH-GoalieBot'
     userP = 'xxxx'
 
